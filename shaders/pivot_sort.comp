@@ -1,0 +1,54 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// photo_pivot: the blocks' mean and their 1st and 99th percentiles (bitonic sort in
+// shared memory), then the fitted pivot.
+layout(local_size_x = 1024) in;
+#include "common.glsl"
+
+shared float v[4096];
+shared float partial[1024];
+
+void main() {
+    uint t = gl_LocalInvocationIndex;
+    uint count = min(48u * pc.block_rows, 4096u);
+    float sum = 0.0;
+    for (uint k = t; k < 4096u; k += 1024u) {
+        float x = k < count ? S[S_BL() + k] : 3.0e38;
+        v[k] = x;
+        if (k < count) sum += x;
+    }
+    partial[t] = sum;
+    barrier();
+    for (uint size = 2u; size <= 4096u; size <<= 1u) {
+        for (uint stride = size >> 1u; stride > 0u; stride >>= 1u) {
+            for (uint k = t; k < 2048u; k += 1024u) {
+                uint i = 2u * k - (k & (stride - 1u));
+                uint j = i + stride;
+                bool ascending = (i & size) == 0u;
+                float a = v[i], b = v[j];
+                if ((a > b) == ascending) {
+                    v[i] = b;
+                    v[j] = a;
+                }
+            }
+            barrier();
+        }
+    }
+    for (uint stride = 512u; stride > 0u; stride >>= 1u) {
+        if (t < stride) partial[t] += partial[t + stride];
+        barrier();
+    }
+    if (t == 0u) {
+        if (count == 0u) {
+            pivot = 0.5;
+            return;
+        }
+        float mean = partial[0] / float(count);
+        uint last = count - 1u;
+        float at1 = float(last) * 0.01, at99 = float(last) * 0.99;
+        uint i1 = uint(at1), i99 = uint(at99);
+        float p1 = v[i1] + (v[min(i1 + 1u, last)] - v[i1]) * (at1 - float(i1));
+        float p99 = v[i99] + (v[min(i99 + 1u, last)] - v[i99]) * (at99 - float(i99));
+        pivot = clamp(0.577 + 0.568 * mean - 0.689 * (p1 + p99) / 2.0, 0.3, 0.75);
+    }
+}

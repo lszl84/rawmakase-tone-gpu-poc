@@ -1,0 +1,30 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Picks the bin holding each selection's k-th value, narrows its prefix, and clears
+// the histogram; after the last round the prefix is the value itself.
+layout(local_size_x = 4) in;
+#include "common.glsl"
+
+void main() {
+    uint s = gl_LocalInvocationIndex;
+    if (s >= 3u) return;
+    uint shift = uint(pc.shift);
+    uint k = kth[s];
+    uint below = 0u;
+    for (uint b = 0u; b < 256u; ++b) {
+        uint c = hist[s * 256u + b];
+        if (k < below + c) {
+            prefix[s] |= b << shift;
+            kth[s] = k - below;
+            break;
+        }
+        below += c;
+    }
+    for (uint b = 0u; b < 256u; ++b) hist[s * 256u + b] = 0u;
+    if (shift == 0u) {
+        float v = uintBitsToFloat(prefix[s]);
+        if (s == 0u) key_shadows = log2(v);
+        else if (s == 1u) key_highlights = log2(v);
+        else highlights = v;
+    }
+}

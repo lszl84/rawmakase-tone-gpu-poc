@@ -1,0 +1,40 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// The guided filter's box means along rows (local_tone.rs blur), clamped at the
+// borders: of log2 luminance and its square, or in the second pass of a and b. Each
+// 16 x 16 tile reads its rows with the filter's halo into shared memory once.
+layout(local_size_x = 16, local_size_y = 16) in;
+#include "common.glsl"
+
+const int TILE = 16;
+const int MAX_RADIUS = 32;
+shared float ta[TILE][TILE + 2 * MAX_RADIUS];
+shared float tb[TILE][TILE + 2 * MAX_RADIUS];
+
+void main() {
+    bool second = (pc.flags & F_SECOND) != 0u;
+    uint a_in = second ? S_A() : S_LOG(), b_in = second ? S_B() : S_LOG();
+    int r = pc.radius, w = int(pc.w), h = int(pc.h);
+    ivec2 tile = ivec2(gl_WorkGroupID.xy) * TILE;
+    ivec2 l = ivec2(gl_LocalInvocationID.xy);
+    int y = min(tile.y + l.y, h - 1);
+    // Load the tile's rows from x - r to x + 15 + r, clamped like the CPU's.
+    for (int k = l.x; k < TILE + 2 * r; k += TILE) {
+        uint i = uint(y * w + clamp(tile.x - r + k, 0, w - 1));
+        float va = S[a_in + i];
+        ta[l.y][k] = va;
+        tb[l.y][k] = second ? S[b_in + i] : va * va;
+    }
+    barrier();
+    ivec2 p = tile + l;
+    if (p.x >= w || p.y >= h) return;
+    float sa = 0.0, sb = 0.0;
+    for (int k = 0; k <= 2 * r; ++k) {
+        sa += ta[l.y][l.x + k];
+        sb += tb[l.y][l.x + k];
+    }
+    float inv = 1.0 / float(2 * r + 1);
+    uint i = uint(p.y * w + p.x);
+    S[S_R1() + i] = sa * inv;
+    S[S_R2() + i] = sb * inv;
+}

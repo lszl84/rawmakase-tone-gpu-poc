@@ -1,0 +1,46 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// The box means along columns, from 16 x 16 tiles read with the filter's halo into
+// shared memory once (rows are contiguous, so the reads are). First pass: the guided
+// filter's coefficients a = var / (var + eps), b = mean - a * mean (local_tone.rs
+// from_luminance). Second pass: the blurred a and b, the map.
+layout(local_size_x = 16, local_size_y = 16) in;
+#include "common.glsl"
+
+const int TILE = 16;
+const int MAX_RADIUS = 32;
+shared float ta[TILE + 2 * MAX_RADIUS][TILE];
+shared float tb[TILE + 2 * MAX_RADIUS][TILE];
+
+void main() {
+    int r = pc.radius, w = int(pc.w), h = int(pc.h);
+    ivec2 tile = ivec2(gl_WorkGroupID.xy) * TILE;
+    ivec2 l = ivec2(gl_LocalInvocationID.xy);
+    int x = min(tile.x + l.x, w - 1);
+    for (int k = l.y; k < TILE + 2 * r; k += TILE) {
+        uint i = uint(clamp(tile.y - r + k, 0, h - 1) * w + x);
+        ta[k][l.x] = S[S_R1() + i];
+        tb[k][l.x] = S[S_R2() + i];
+    }
+    barrier();
+    ivec2 p = tile + l;
+    if (p.x >= w || p.y >= h) return;
+    float m = 0.0, m2 = 0.0;
+    for (int k = 0; k <= 2 * r; ++k) {
+        m += ta[l.y + k][l.x];
+        m2 += tb[l.y + k][l.x];
+    }
+    float inv = 1.0 / float(2 * r + 1);
+    m *= inv;
+    m2 *= inv;
+    uint i = uint(p.y * w + p.x);
+    if ((pc.flags & F_SECOND) != 0u) {
+        S[S_FA() + i] = m;
+        S[S_FB() + i] = m2;
+    } else {
+        float var = max(m2 - m * m, 0.0);
+        float a = var / (var + 1.5);
+        S[S_A() + i] = a;
+        S[S_B() + i] = m - a * m;
+    }
+}

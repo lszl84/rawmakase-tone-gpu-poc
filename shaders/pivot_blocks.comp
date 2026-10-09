@@ -1,0 +1,28 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// The Contrast pivot's blocks (basic_tone.rs blocks, photo_pivot): the small image
+// toned at the camera's exposure, encoded, averaged over 48 columns of blocks, then
+// each block's luminance encoded.
+layout(local_size_x = 64) in;
+#include "common.glsl"
+
+void main() {
+    uint blk = gl_GlobalInvocationID.x;
+    uint rows = pc.block_rows;
+    if (blk >= 48u * rows) return;
+    uint r = blk / 48u, c = blk % 48u;
+    uint x0 = c * pc.w / 48u, x1 = (c + 1u) * pc.w / 48u;
+    uint y0 = r * pc.h / rows, y1 = (r + 1u) * pc.h / rows;
+    uint xe = min(max(x1, x0 + 1u), pc.w), ye = min(max(y1, y0 + 1u), pc.h);
+    vec3 sum = vec3(0.0);
+    uint n = 0u;
+    for (uint y = y0; y < ye; ++y)
+        for (uint x = x0; x < xe; ++x) {
+            vec3 t = clamp(tone_stage(px[y * pc.w + x].rgb, pc.gain0, pc.black0), 0.0, 1.0);
+            sum += vec3(srgb_encode(t.r), srgb_encode(t.g), srgb_encode(t.b));
+            ++n;
+        }
+    vec3 avg = clamp(sum / float(n), 0.0, 1.0);
+    vec3 d = vec3(srgb_decode(avg.r), srgb_decode(avg.g), srgb_decode(avg.b));
+    S[S_BL() + blk] = srgb_encode(clamp(luminance(d), 1e-5, 1.0));
+}

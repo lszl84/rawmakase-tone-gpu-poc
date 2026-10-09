@@ -1,0 +1,17 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// The small image toned at the current Exposure: luminance for the Shadows and
+// Highlights map and its keys, encoded luminance for Whites (local_tone.rs build,
+// tone.rs photo_highlights).
+layout(local_size_x = 256) in;
+#include "common.glsl"
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.n) return;
+    vec3 t = tone_stage(px[i].rgb, pc.gain, pc.black);
+    float l = max(luminance(t), 6e-4);
+    S[S_L() + i] = l;
+    S[S_LOG() + i] = log2(l);
+    S[S_E() + i] = srgb_encode(clamp(l, 0.0, 1.0));
+}

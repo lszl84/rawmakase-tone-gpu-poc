@@ -1,0 +1,17 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// With the cache: the on-screen pixels through the tone stage, once per Exposure, so
+// the other sliders only run what follows it.
+layout(local_size_x = 16, local_size_y = 16) in;
+#include "common.glsl"
+
+layout(set = 0, binding = 6) uniform sampler2D photo;
+layout(set = 0, binding = 8, rgba32f) uniform writeonly image2D toned_out;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(toned_out);
+    if (any(greaterThanEqual(p, size))) return;
+    vec2 uv = (vec2(p) + 0.5) / vec2(size);
+    imageStore(toned_out, p, vec4(tone_stage(textureLod(photo, uv, 0.0).rgb, pc.gain, pc.black), 1.0));
+}

@@ -1,0 +1,30 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// One round of an exact radix select (8 bits per round, most significant first) for
+// three selections at once: the Shadows and Highlights keys (luminance) and the
+// Whites highlights (encoded luminance). Values are positive floats, whose bits order
+// like the floats. A few workgroups loop over the pixels, so few partial histograms
+// are added to the global one.
+layout(local_size_x = 256) in;
+#include "common.glsl"
+
+shared uint bins[768];
+
+void main() {
+    for (uint b = gl_LocalInvocationIndex; b < 768u; b += 256u) bins[b] = 0u;
+    barrier();
+    uint shift = uint(pc.shift);
+    uint high = shift == 24u ? 0u : (0xFFFFFFFFu << (shift + 8u));
+    uvec3 want = uvec3(prefix[0], prefix[1], prefix[2]) & high;
+    uint stride = gl_NumWorkGroups.x * 256u;
+    for (uint i = gl_GlobalInvocationID.x; i < pc.n; i += stride) {
+        uint l = floatBitsToUint(S[S_L() + i]);
+        uint e = floatBitsToUint(S[S_E() + i]);
+        if ((l & high) == want.x) atomicAdd(bins[(l >> shift) & 255u], 1u);
+        if ((l & high) == want.y) atomicAdd(bins[256u + ((l >> shift) & 255u)], 1u);
+        if ((e & high) == want.z) atomicAdd(bins[512u + ((e >> shift) & 255u)], 1u);
+    }
+    barrier();
+    for (uint b = gl_LocalInvocationIndex; b < 768u; b += 256u)
+        if (bins[b] != 0u) atomicAdd(hist[b], bins[b]);
+}

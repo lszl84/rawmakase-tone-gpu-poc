@@ -1,0 +1,40 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// BasicTone::new for the adaptive Contrast: Whites, then Blacks, then Contrast at the
+// photo's pivot, at 1025 levels, made monotone with a running maximum.
+layout(local_size_x = 1024) in;
+#include "common.glsl"
+
+shared float values[1025];
+
+float contrast_at(float s, float pv, float x) {
+    if (s == 0.0) return x;
+    float k = log(pow(srgb_decode(clamp(T[T_CONTRAST_PIVOT], 0.0, 1.0)), 1.0 / 2.2)) /
+              log(pow(srgb_decode(clamp(pv, 0.0, 1.0)), 1.0 / 2.2));
+    float to_x = pow(srgb_decode(clamp(x, 0.0, 1.0)), 1.0 / 2.2);
+    float warped = srgb_encode(pow(clamp(pow(to_x, k), 0.0, 1.0), 2.2));
+    float y = basic_slider(T_CONTRAST_CHART, s, warped);
+    float to_y = pow(srgb_decode(clamp(y, 0.0, 1.0)), 1.0 / 2.2);
+    return srgb_encode(pow(clamp(pow(to_y, 1.0 / k), 0.0, 1.0), 2.2));
+}
+
+void main() {
+    uint t = gl_LocalInvocationIndex;
+    float pv = pc.contrast != 0.0 ? pivot : 0.5;
+    for (uint i = t; i <= 1024u; i += 1024u) {
+        float x = float(i) / 1024.0;
+        x = basic_slider(T_WHITES, pc.whites_s, x);
+        x = basic_slider(T_BLACKS, pc.blacks_s, x);
+        values[i] = contrast_at(pc.contrast, pv, x);
+    }
+    barrier();
+    if (t == 0u) {
+        float m = 0.0;
+        for (uint i = 0u; i <= 1024u; ++i) {
+            m = max(m, values[i]);
+            values[i] = m;
+        }
+    }
+    barrier();
+    for (uint i = t; i <= 1024u; i += 1024u) lut[i] = values[i];
+}
